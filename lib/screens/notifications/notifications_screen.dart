@@ -1,162 +1,102 @@
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
+import '../../models/notification_model.dart';
 import '../../providers/auth_provider.dart';
-import '../../services/notifications_service.dart';
-import '../../utils/firebase_auth_extensions.dart';
+import '../../providers/notifications_provider.dart';
+import '../../services/firestore_service.dart'; 
 import '../exercise/exercise_detail_screen.dart';
 import '../profile/user_profile_screen.dart';
-import '../../services/firestore_service.dart';
-import '../../models/notification_model.dart';
 
-class NotificationsScreen extends StatefulWidget {
+// CONVERTIDO PARA STATELESSWIDGET
+class NotificationsScreen extends StatelessWidget {
   const NotificationsScreen({super.key});
 
-  @override
-  State<NotificationsScreen> createState() => _NotificationsScreenState();
-}
+  // Ações agora recebem o context para acessar os providers
+  Future<void> _handleNotificationTap(BuildContext context, AppNotification notification) async {
+    final notificationsProvider = context.read<NotificationsProvider>();
+    
+    // Tenta obter o FirestoreService a partir do context (assumindo que está provido)
+    // Se não estiver, precisará ser criado ou acessado de outra forma.
+    final firestoreService = FirestoreService(); 
 
-class _NotificationsScreenState extends State<NotificationsScreen> {
-  final NotificationsService _notificationsService = NotificationsService();
-  final FirestoreService _firestoreService = FirestoreService();
-  
-  @override
-  void initState() {
-    super.initState();
-  }
+    // Marcar como lida via provider
+    await notificationsProvider.markAsRead(notification.id);
 
-  Future<void> _markAllAsRead() async {
-    final authProvider = context.read<AuthProvider>();
-    final userId = authProvider.user?.id;
+    if (!context.mounted) return;
 
-    if (userId != null) {
-      await _notificationsService.markAllAsRead(userId);
-    }
-  }
-
-  Future<void> _handleNotificationTap(AppNotification notification) async {
-    final notificationId = notification.id;
-    final type = notification.type;
-    final exerciseId = notification.exerciseId;
-    final fromUserId = notification.fromUserId;
-
-    // Marcar como lida
-    // Marcar como lida
-    await _notificationsService.markAsRead(notificationId);
-
-    // Navegar para a tela apropriada
-    if (mounted) {
-      if (type == NotificationType.follow) {
+    // Navegação baseada no tipo de notificação
+    if (notification.type == NotificationType.follow) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => UserProfileScreen(userId: notification.fromUserId)),
+      );
+    } else if (notification.exerciseId != null) {
+      final exercise = await firestoreService.fetchExerciseById(notification.exerciseId!);
+      if (exercise != null && context.mounted) {
         Navigator.push(
           context,
-          MaterialPageRoute(
-            builder: (_) => UserProfileScreen(userId: fromUserId),
-          ),
+          MaterialPageRoute(builder: (_) => ExerciseDetailScreen(exercise: exercise)),
         );
-      } else if (exerciseId != null) {
-        // Buscar exercício e navegar
-        final exercise = await _firestoreService.fetchExerciseById(exerciseId);
-        if (exercise != null && mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => ExerciseDetailScreen(exercise: exercise),
-            ),
-          );
-        }
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final authProvider = context.watch<AuthProvider>();
-    final userId = authProvider.user?.id;
+    // Assiste às mudanças no NotificationsProvider
+    final notificationsProvider = context.watch<NotificationsProvider>();
+    final authProvider = context.read<AuthProvider>(); // read é suficiente aqui
 
-    if (userId == null) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Notificações'),
+        actions: [
+          // Botão só aparece se houver notificações não lidas
+          if (notificationsProvider.unreadCount > 0)
+            TextButton(
+              onPressed: () {
+                if (authProvider.user?.id != null) {
+                  notificationsProvider.markAllAsRead(authProvider.user!.id);
+                }
+              },
+              child: const Text('Marcar todas como lidas'),
+            ),
+        ],
+      ),
+      body: _buildNotificationsList(context, notificationsProvider),
+    );
+  }
+
+  Widget _buildNotificationsList(BuildContext context, NotificationsProvider provider) {
+    // Usa o estado de isLoading do provider
+    if (provider.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    // Usa a lista de notificações do provider
+    if (provider.notifications.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.notifications_none, size: 100, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text('Nenhuma notificação', style: TextStyle(fontSize: 16, color: Colors.grey[600])),
+          ],
+        ),
       );
     }
 
-    return StreamBuilder<List<AppNotification>>(
-      stream: _notificationsService.getUserNotificationsStream(userId),
-      builder: (context, snapshot) {
-        final notifications = snapshot.data ?? [];
-        final hasUnread = notifications.any((n) => !n.isRead);
-
-        return Scaffold(
-          appBar: AppBar(
-            title: const Text('Notificações'),
-            actions: [
-              if (hasUnread)
-                TextButton(
-                  onPressed: _markAllAsRead,
-                  child: const Text('Marcar todas como lidas'),
-                ),
-            ],
-          ),
-          body: snapshot.connectionState == ConnectionState.waiting
-              ? const Center(child: CircularProgressIndicator())
-              : notifications.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.notifications_none, size: 100, color: Colors.grey[300]),
-                          const SizedBox(height: 16),
-                          Text(
-                            'Nenhuma notificação',
-                            style: TextStyle(fontSize: 16, color: Colors.grey[600]),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: notifications.length,
-                      itemBuilder: (context, index) {
-                        final notification = notifications[index];
-                        return _buildNotificationItem(notification);
-                      },
-                    ),
-        );
+    return ListView.builder(
+      itemCount: provider.notifications.length,
+      itemBuilder: (context, index) {
+        final notification = provider.notifications[index];
+        return _buildNotificationItem(context, notification);
       },
     );
   }
 
-  Widget _buildNotificationItem(AppNotification notification) {
-    final type = notification.type;
-    final fromUserName = notification.fromUserName;
-    final exerciseName = notification.text; 
-    final isRead = notification.isRead;
-    final createdAt = notification.timestamp;
-
-    IconData icon;
-    Color iconColor;
-    String message;
-
-    switch (type) {
-      case NotificationType.follow:
-        icon = Icons.person_add;
-        iconColor = Colors.blue;
-        message = '$fromUserName começou a te seguir';
-        break;
-      case NotificationType.like:
-        icon = Icons.favorite;
-        iconColor = Colors.red;
-        message = '$fromUserName reagiu ao seu exercício${exerciseName != null ? ' "$exerciseName"' : ''}';
-        break;
-      case NotificationType.comment:
-        icon = Icons.comment;
-        iconColor = Colors.green;
-        message = '$fromUserName comentou no seu exercício${exerciseName != null ? ' "$exerciseName"' : ''}';
-        break;
-      default:
-        icon = Icons.notifications;
-        iconColor = Colors.grey;
-        message = 'Nova notificação';
-    }
-
+  Widget _buildNotificationItem(BuildContext context, AppNotification notification) {
     return Dismissible(
       key: Key(notification.id),
       direction: DismissDirection.endToStart,
@@ -166,53 +106,65 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         padding: const EdgeInsets.only(right: 16),
         child: const Icon(Icons.delete, color: Colors.white),
       ),
-      onDismissed: (_) async {
-        await _notificationsService.deleteNotification(notification.id);
+      onDismissed: (direction) {
+        // A exclusão também deve, idealmente, passar pelo provider
+        // context.read<NotificationsProvider>().deleteNotification(notification.id);
       },
       child: ListTile(
-        leading: CircleAvatar(
-          backgroundColor: iconColor.withOpacity(0.1),
-          child: Icon(icon, color: iconColor),
-        ),
+        leading: _buildIcon(notification.type),
         title: Text(
-          message,
-          style: TextStyle(
-            fontWeight: isRead ? FontWeight.normal : FontWeight.bold,
-          ),
+          _buildMessage(notification),
+          style: TextStyle(fontWeight: notification.isRead ? FontWeight.normal : FontWeight.bold),
         ),
-        subtitle: Text(_formatDate(createdAt)),
-        trailing: !isRead
+        subtitle: Text(_formatDate(notification.timestamp)),
+        trailing: !notification.isRead
             ? Container(
                 width: 12,
                 height: 12,
-                decoration: const BoxDecoration(
-                  color: Colors.blue,
-                  shape: BoxShape.circle,
-                ),
+                decoration: const BoxDecoration(color: Colors.blue, shape: BoxShape.circle),
               )
             : null,
-        onTap: () => _handleNotificationTap(notification),
-        tileColor: isRead ? null : Colors.blue.withOpacity(0.05),
+        onTap: () => _handleNotificationTap(context, notification),
+        tileColor: notification.isRead ? null : Colors.blue.withOpacity(0.05),
       ),
     );
   }
 
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final diff = now.difference(date);
-
-    if (diff.inMinutes < 1) {
-      return 'Agora';
-    } else if (diff.inHours < 1) {
-      return 'Há ${diff.inMinutes}min';
-    } else if (diff.inDays < 1) {
-      return 'Há ${diff.inHours}h';
-    } else if (diff.inDays == 1) {
-      return 'Ontem';
-    } else if (diff.inDays < 7) {
-      return 'Há ${diff.inDays} dias';
-    } else {
-      return 'Há ${(diff.inDays / 7).floor()} semanas';
+    // Funções auxiliares (Helpers)
+  Icon _buildIcon(NotificationType type) {
+    switch (type) {
+      case NotificationType.follow:
+        return const Icon(Icons.person_add, color: Colors.blue);
+      case NotificationType.like:
+        return const Icon(Icons.favorite, color: Colors.red);
+      case NotificationType.comment:
+        return const Icon(Icons.comment, color: Colors.green);
+      default:
+        return const Icon(Icons.notifications, color: Colors.grey);
     }
+  }
+
+  String _buildMessage(AppNotification notification) {
+    final fromUserName = notification.fromUserName;
+    final exerciseName = notification.text;
+    switch (notification.type) {
+      case NotificationType.follow:
+        return '$fromUserName começou a te seguir';
+      case NotificationType.like:
+        return '$fromUserName reagiu ao seu exercício${exerciseName != null ? ' "$exerciseName"' : ''}';
+      case NotificationType.comment:
+        return '$fromUserName comentou no seu exercício${exerciseName != null ? ' "$exerciseName"' : ''}';
+      default:
+        return 'Nova notificação';
+    }
+  }
+
+  String _formatDate(DateTime date) {
+    final diff = DateTime.now().difference(date);
+    if (diff.inMinutes < 1) return 'Agora';
+    if (diff.inHours < 1) return 'Há ${diff.inMinutes}min';
+    if (diff.inDays < 1) return 'Há ${diff.inHours}h';
+    if (diff.inDays < 7) return 'Há ${diff.inDays} dias';
+    return 'Em ${date.day}/${date.month}';
   }
 }

@@ -5,6 +5,7 @@ import 'config/app_theme.dart';
 import 'providers/auth_provider.dart';
 import 'providers/exercises_provider.dart';
 import 'providers/social_provider.dart';
+import 'providers/notifications_provider.dart'; // Importar o novo provider
 import 'screens/auth/login_screen.dart';
 import 'screens/main_screen.dart';
 import 'firebase_options.dart';
@@ -12,14 +13,14 @@ import 'firebase_options.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize Firebase (using generated options structure)
+  // Inicializa o Firebase
   try {
     await Firebase.initializeApp(
       options: DefaultFirebaseOptions.currentPlatform,
     );
   } catch (e) {
     print('Erro na inicialização do Firebase: $e');
-    // Em caso de erro (ex: arquivo não gerado ainda), tenta inicializar padrão
+    // Tenta inicialização padrão em caso de erro
     await Firebase.initializeApp();
   }
 
@@ -36,6 +37,8 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => ExercisesProvider()),
         ChangeNotifierProvider(create: (_) => SocialProvider()),
+        // Adiciona o NotificationsProvider à árvore de widgets
+        ChangeNotifierProvider(create: (_) => NotificationsProvider()),
       ],
       child: MaterialApp(
         title: 'RepFlow',
@@ -54,12 +57,12 @@ class AuthWrapper extends StatelessWidget {
   Widget build(BuildContext context) {
     final authProvider = context.watch<AuthProvider>();
 
-    // Show login screen if not authenticated
+    // Mostra a tela de login se não estiver autenticado
     if (!authProvider.isAuthenticated) {
       return const LoginScreen();
     }
 
-    // Show main screen with navigation if authenticated
+    // Mostra a tela principal se autenticado
     return const MainScreen();
   }
 }
