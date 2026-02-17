@@ -1,0 +1,465 @@
+import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../models/exercise_model.dart';
+import '../../models/feeling_log_model.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/exercises_provider.dart';
+import '../../providers/social_provider.dart';
+import '../../services/firestore_service.dart';
+import '../../widgets/custom_button.dart';
+import '../../utils/firebase_auth_extensions.dart';
+import '../../widgets/comments_section.dart';
+import '../../widgets/share_to_group_dialog.dart';
+
+class ExerciseDetailScreen extends StatefulWidget {
+  final Exercise exercise;
+
+  const ExerciseDetailScreen({super.key, required this.exercise});
+
+  @override
+  State<ExerciseDetailScreen> createState() => _ExerciseDetailScreenState();
+}
+
+class _ExerciseDetailScreenState extends State<ExerciseDetailScreen> {
+  final _noteController = TextEditingController();
+  final FirestoreService _firestoreService = FirestoreService();
+  bool _hasLiked = false;
+  bool _hasValeu = false;
+  bool _hasAmen = false;
+  bool _isLoadingReactions = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkReactions();
+  }
+
+  Future<void> _checkReactions() async {
+    final authProvider = context.read<AuthProvider>();
+    final userId = authProvider.user?.id;
+    if (userId != null) {
+      final reactions = await _firestoreService.getUserReactions(
+        userId,
+        widget.exercise.id,
+      );
+      setState(() {
+        _hasLiked = reactions['liked'] ?? false;
+        _hasValeu = reactions['valeu'] ?? false;
+        _hasAmen = reactions['amen'] ?? false;
+        _isLoadingReactions = false;
+      });
+    }
+  }
+
+  Future<void> _toggleReaction(String reactionType) async {
+    final authProvider = context.read<AuthProvider>();
+    final socialProvider = context.read<SocialProvider>();
+    final userId = authProvider.user?.id;
+    
+    if (userId == null) return;
+
+    final newState = await socialProvider.toggleReaction(
+      widget.exercise.id,
+      userId,
+      reactionType,
+    );
+
+    setState(() {
+      if (reactionType == 'like') _hasLiked = newState;
+      if (reactionType == 'valeu') _hasValeu = newState;
+      if (reactionType == 'amen') _hasAmen = newState;
+    });
+  }
+
+  @override
+  void dispose() {
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _addFeelingLog() async {
+    if (_noteController.text.trim().isEmpty) return;
+
+    final logData = {
+      'exercise_id': widget.exercise.id,
+      'note': _noteController.text.trim(),
+      'created_at': FieldValue.serverTimestamp(),
+    };
+
+    await _firestoreService.addFeelingLog(logData);
+    _noteController.clear();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Nota adicionada!')),
+      );
+    }
+  }
+
+  Future<void> _deleteExercise() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Excluir Exercício'),
+        content: const Text(
+          'Tem certeza que deseja excluir este exercício? Esta ação não pode ser desfeita.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Excluir'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      final authProvider = context.read<AuthProvider>();
+      final exercisesProvider = context.read<ExercisesProvider>();
+      
+      // Mostrar loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+      
+      final success = await exercisesProvider.deleteExercise(widget.exercise);
+
+      // Fechar loading
+      if (mounted) Navigator.pop(context);
+
+      if (success && mounted) {
+        // Força reload da lista
+        await exercisesProvider.reloadExercises(authProvider.user!.id);
+        
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Exercício excluído com sucesso!')),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(exercisesProvider.errorMessage ?? 'Erro ao excluir exercício'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  String _formatTimestamp(DateTime timestamp) {
+    final now = DateTime.now();
+    final difference = now.difference(timestamp);
+
+    if (difference.inDays == 0) {
+      if (difference.inHours == 0) {
+        return 'Há ${difference.inMinutes} min';
+      }
+      return 'Hoje às ${DateFormat('HH:mm').format(timestamp)}';
+    } else if (difference.inDays == 1) {
+      return 'Ontem às ${DateFormat('HH:mm').format(timestamp)}';
+    } else if (difference.inDays < 7) {
+      return DateFormat('EEEE, HH:mm', 'pt_BR').format(timestamp);
+    } else {
+      return DateFormat('dd/MM/yyyy, HH:mm').format(timestamp);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final FirebaseFirestore firestore = FirebaseFirestore.instance;
+    
+    return StreamBuilder<DocumentSnapshot>(
+      stream: firestore.collection('exercises').doc(widget.exercise.id).snapshots(),
+      builder: (context, snapshot) {
+        // Usar dados do stream se disponível, senão usar widget.exercise
+        Exercise currentExercise = widget.exercise;
+        
+        if (snapshot.hasData && snapshot.data!.exists) {
+          currentExercise = Exercise.fromMap(
+            snapshot.data!.id,
+            snapshot.data!.data() as Map<String, dynamic>,
+          );
+        }
+        
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(currentExercise.name),
+            actions: [
+              if (currentExercise.isPublic)
+                IconButton(
+                  icon: const Icon(Icons.share),
+                  onPressed: () async {
+                    final result = await showDialog(
+                      context: context,
+                      builder: (_) => ShareToGroupDialog(exerciseId: currentExercise.id),
+                    );
+                    if (result == true) {
+                      // Exercício compartilhado com sucesso
+                    }
+                  },
+                  tooltip: 'Compartilhar no Grupo',
+                ),
+              IconButton(
+                icon: const Icon(Icons.delete),
+                onPressed: _deleteExercise,
+              ),
+            ],
+          ),
+          body: _buildBody(context, currentExercise),
+        );
+      },
+    );
+  }
+
+  Widget _buildBody(BuildContext context, Exercise currentExercise) {
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+            // Exercise image
+            if (currentExercise.machineImageUrl != null)
+              Image.network(
+                currentExercise.machineImageUrl!,
+                height: 250,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => _buildImagePlaceholder(250),
+              )
+            else
+              _buildImagePlaceholder(250),
+
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Training group chip
+                  Chip(
+                    label: Text(currentExercise.trainingGroup),
+                    backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                    labelStyle: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Instructions
+                  Text(
+                    'Instruções de Execução',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    currentExercise.instructions,
+                    style: Theme.of(context).textTheme.bodyLarge,
+                  ),
+                  const SizedBox(height: 24),
+
+                  // Like and comment actions
+                  if (currentExercise.isPublic) ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        // Like button
+                        _buildReactionButton(
+                          icon: _hasLiked ? Icons.favorite : Icons.favorite_border,
+                          label: '${currentExercise.likesCount}',
+                          color: _hasLiked ? Colors.red : null,
+                          onTap: () => _toggleReaction('like'),
+                        ),
+                        // Valeu button (👍)
+                        _buildReactionButton(
+                          emoji: '👍',
+                          label: '${currentExercise.valeuCount}',
+                          isActive: _hasValeu,
+                          onTap: () => _toggleReaction('valeu'),
+                        ),
+                        // Amém button (🙏)
+                        _buildReactionButton(
+                          emoji: '🙏',
+                          label: '${currentExercise.amenCount}',
+                          isActive: _hasAmen,
+                          onTap: () => _toggleReaction('amen'),
+                        ),
+                        // Comments
+                        IconButton(
+                          icon: const Icon(Icons.comment_outlined),
+                          onPressed: () {
+                            // Scroll para comentários
+                          },
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 32),
+
+                    // Comments section
+                    CommentsSection(exerciseId: currentExercise.id),
+                    const Divider(height: 32),
+                  ],
+
+                  // Feeling logs section
+                  Text(
+                    'Como estou me sentindo',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Add new feeling log
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _noteController,
+                          decoration: const InputDecoration(
+                            hintText: 'Adicionar nota...',
+                            border: OutlineInputBorder(),
+                            contentPadding: EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                          ),
+                          maxLines: 2,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        onPressed: _addFeelingLog,
+                        icon: const Icon(Icons.send),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Feeling logs list
+                  StreamBuilder<List<Map<String, dynamic>>>(
+                    stream: _firestoreService.getFeelingLogsStream(currentExercise.id),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return const Center(child: CircularProgressIndicator());
+                      }
+
+                      if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                        return Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Center(
+                              child: Text(
+                                'Nenhuma nota ainda',
+                                style: TextStyle(color: Colors.grey[600]),
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      final logs = snapshot.data!;
+
+                      return Column(
+                        children: logs.map((log) {
+                          final note = log['note'] as String? ?? '';
+                          final timestamp = (log['created_at'] as Timestamp?)?.toDate() ?? DateTime.now();
+                          
+                          return Card(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            child: ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: Theme.of(context).colorScheme.primary,
+                                child: const Icon(Icons.notes, color: Colors.white),
+                              ),
+                              title: Text(note),
+                              subtitle: Text(
+                                _formatTimestamp(timestamp),
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildImagePlaceholder(double height) {
+    return Container(
+      height: height,
+      color: Colors.grey[200],
+      child: Icon(
+        Icons.fitness_center,
+        size: 80,
+        color: Colors.grey[400],
+      ),
+    );
+  }
+
+  Widget _buildReactionButton({
+    IconData? icon,
+    String? emoji,
+    required String label,
+    Color? color,
+    bool isActive = false,
+    required VoidCallback onTap,
+  }) {
+    if (_isLoadingReactions) {
+      return const SizedBox(
+        width: 24,
+        height: 24,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      );
+    }
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(20),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.blue[50] : null,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isActive ? Colors.blue : Colors.grey[300]!,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null)
+              Icon(icon, color: color, size: 20)
+            else if (emoji != null)
+              Text(emoji, style: const TextStyle(fontSize: 20)),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontWeight: isActive ? FontWeight.bold : null,
+                color: isActive ? Colors.blue : null,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+

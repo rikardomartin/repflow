@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "371176657638",
+    "project_id": "repflowshow",
+    "storage_bucket": "repflowshow.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:371176657638:android:228e9578ca54bdbbe62127",
+        "android_client_info": {
+          "package_name": "com.rikardo.repflow"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBpzQszErqWsSQNJgua3hfBwEMi491mjr0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
